@@ -5,13 +5,8 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="fcb810f0-7d8f-4d7f-847d-ebec5bba45a7" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.dockerignor" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/tg_youtube_dl_bot.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/tg_youtube_dl_bot.iml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/handlers/common.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/common.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/handlers/downloader.py" beforeDir="false" afterPath="$PROJECT_DIR$/handlers/downloader.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.py" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

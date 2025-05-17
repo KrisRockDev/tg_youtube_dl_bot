@@ -13,14 +13,17 @@ load_dotenv()
 
 # Загружаем ADMIN_ID и проверяем его наличие и тип
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
+ADMIN_ID = None  # Инициализируем как None
+
 if not ADMIN_ID_STR:
-    logging.critical("Переменная окружения ADMIN_ID не установлена!")
-    raise ValueError("Переменная окружения ADMIN_ID не установлена! Пожалуйста, добавьте ADMIN_ID в ваш .env файл.")
-try:
-    ADMIN_ID = int(ADMIN_ID_STR)
-except ValueError:
-    logging.critical("ADMIN_ID должен быть целым числом (ID пользователя Telegram)!")
-    raise ValueError("ADMIN_ID должен быть целым числом (ID пользователя Telegram)!")
+    logging.warning("Переменная окружения ADMIN_ID не установлена! Функции администрирования будут ограничены.")
+else:
+    try:
+        ADMIN_ID = int(ADMIN_ID_STR)
+    except ValueError:
+        logging.critical(
+            "ADMIN_ID должен быть целым числом (ID пользователя Telegram)! Функции администрирования будут ограничены.")
+        ADMIN_ID = None  # Оставляем None, если значение некорректно
 
 
 @router.message(F.text, Command("start"))
@@ -63,7 +66,7 @@ https://pin.it/
 
 
 @router.message(F.text)
-async def message_handler(message: types.Message, bot: Bot) -> None:  # Добавляем bot: Bot для доступа к экземпляру бота
+async def message_handler(message: types.Message, bot: Bot) -> None:
     msg_text_template = """
 <b>Platform: {}</b>
 
@@ -73,8 +76,8 @@ Sending {}
     user_status_msg = await message.answer(msg_text_template.format("🟨", "❌", "❌"))
 
     downloaded_filename = None
-    admin_report_message = ""
-    platform_name = "не определена"  # Инициализация платформы
+    file_type = None
+    platform_name = "не определена"
 
     try:
         dl = downloader.Downloader()
@@ -85,7 +88,6 @@ Sending {}
 
         await user_status_msg.edit_text(msg_text_template.format(platform_name, "🟨", "❌"))
 
-        # Используем message.from_user.id для уникальности имени файла
         base_filename_for_dl = str(f"{time.time()}-{message.from_user.id}")
         downloaded_filename = dl.download(platform_name, message.text, base_filename_for_dl)
 
@@ -98,7 +100,6 @@ Sending {}
         file_type = file_type_map.get(file_ext)
 
         if not file_type:
-            # Это может произойти, если downloader.py вернет файл с неизвестным расширением
             logging.error(
                 f"Не удалось определить тип файла для '{downloaded_filename}' (расширение '{file_ext}' неизвестно).")
             raise ValueError(
@@ -111,23 +112,61 @@ Sending {}
             message,
             f"answer_{file_type}")(
             types.FSInputFile(downloaded_filename),
-            # caption="<b>@free_yt_dl_bot</b>" # Раскомментируйте, если нужен caption
         )
 
-        time.sleep(0.5)  # Небольшая задержка, как и было
+        time.sleep(0.5)
         await user_status_msg.edit_text(msg_text_template.format(platform_name, "✅", "✅"))
 
-        # Формируем сообщение для админа об успехе
-        admin_report_message = (
-            f"✅ <b>Успех!</b>\n"
-            f"Пользователь: {message.from_user.full_name} (@{message.from_user.username or 'N/A'}, ID: {message.from_user.id})\n"
-            f"Платформа: {platform_name}\n"
-            f"Ссылка: {message.text}\n"
-            f"Файл: {os.path.basename(downloaded_filename)}\n"
-            f"Результат: Успешно отправлено пользователю."
-        )
+        # Если ADMIN_ID установлен и пользователь НЕ админ
+        if ADMIN_ID and message.from_user.id != ADMIN_ID:
+            # 1. Отправляем текстовый отчет об успехе админу
+            admin_text_report_success = (
+                f"✅ <b>Успех! Файл отправлен пользователю.</b>\n"
+                f"Пользователь: {message.from_user.full_name} (@{message.from_user.username or 'N/A'}, ID: {message.from_user.id})\n"
+                f"Платформа: {platform_name}\n"
+                f"Ссылка (первые 200 симв.): {message.text[:200]}{'...' if len(message.text) > 200 else ''}\n"
+                f"Имя файла: {os.path.basename(downloaded_filename)}"
+            )
+            try:
+                await bot.send_message(ADMIN_ID, admin_text_report_success, parse_mode="HTML",
+                                       disable_web_page_preview=True)
+            except Exception as e_admin_text_send:
+                logging.error(f"Не удалось отправить текстовый отчет админу {ADMIN_ID}: {e_admin_text_send}")
 
-        # Удаляем исходное сообщение пользователя и статусное сообщение бота ПОСЛЕ успешной отправки
+            # 2. Пытаемся отправить файл админу (если он есть и тип определен)
+            if downloaded_filename and file_type:  # Дополнительная проверка, что есть что отправлять
+                admin_file_caption = (
+                    f"Копия файла для пользователя: {message.from_user.full_name} (@{message.from_user.username or 'N/A'})\n"
+                    f"ID: {message.from_user.id}\n"
+                    f"Оригинальная ссылка (первые 100 симв.): {message.text[:100]}{'...' if len(message.text) > 100 else ''}"
+                )
+                try:
+                    await getattr(bot, f"send_{file_type}")(
+                        ADMIN_ID,
+                        types.FSInputFile(downloaded_filename),
+                        caption=admin_file_caption,
+                        parse_mode="HTML"  # Для caption, если он содержит HTML теги
+                    )
+                    logging.info(f"Копия файла {downloaded_filename} успешно отправлена админу {ADMIN_ID}.")
+                except Exception as e_admin_send_file:
+                    logging.error(f"Не удалось отправить копию файла админу {ADMIN_ID}: {e_admin_send_file}")
+                    # Отправляем отдельное уведомление админу об ошибке отправки файла, если он этого хочет
+                    # (Можно добавить проверку, был ли успешен текстовый отчет)
+                    try:
+                        await bot.send_message(
+                            ADMIN_ID,
+                            f"⚠️ Файл для пользователя {message.from_user.full_name} (ID: {message.from_user.id}) "
+                            f"был успешно обработан и отправлен ему.\n"
+                            f"Однако, мне не удалось отправить копию файла вам (администратору).\n"
+                            f"Причина: {e_admin_send_file}",
+                            parse_mode="HTML",
+                            disable_web_page_preview=True
+                        )
+                    except Exception as e_notify_fail_send_file:
+                        logging.error(
+                            f"Не удалось уведомить админа об ошибке отправки ему файла: {e_notify_fail_send_file}")
+
+        # Удаляем исходное сообщение пользователя и статусное сообщение бота ПОСЛЕ успешной отправки и отчетов
         await message.delete()
         await user_status_msg.delete()
 
@@ -142,35 +181,38 @@ Sending {}
             # Отправляем новое сообщение пользователю об ошибке
             await message.answer(f"⚠️ Произошла ошибка: {error_message}")
 
-        # Формируем сообщение для админа об ошибке
-        admin_report_message = (
-            f"❌ <b>Ошибка!</b>\n"
-            f"Пользователь: {message.from_user.full_name} (@{message.from_user.username or 'N/A'}, ID: {message.from_user.id})\n"
-            f"Платформа: {platform_name}\n"  # platform_name будет "не определена" или реальное значение
-            f"Ссылка: {message.text}\n"
-            f"Ошибка: {error_message}"
-        )
-    finally:
-        # Отправка отчета админу (если сообщение сформировано и пользователь не является админом)
-        if admin_report_message and message.from_user.id != ADMIN_ID:
+        # Отправляем отчет об ошибке админу, если это не сам админ и ADMIN_ID установлен
+        if ADMIN_ID and message.from_user.id != ADMIN_ID:
+            admin_text_report_error = (
+                f"❌ <b>Ошибка при обработке запроса!</b>\n"
+                f"Пользователь: {message.from_user.full_name} (@{message.from_user.username or 'N/A'}, ID: {message.from_user.id})\n"
+                f"Платформа: {platform_name}\n"
+                f"Ссылка (первые 200 симв.): {message.text[:200]}{'...' if len(message.text) > 200 else ''}\n"
+                f"Ошибка: {error_message}"
+            )
             try:
-                await bot.send_message(ADMIN_ID, admin_report_message, parse_mode="HTML", disable_web_page_preview=True)
-            except Exception as e_admin_send:
-                logging.error(f"Не удалось отправить сообщение администратору (ID: {ADMIN_ID}): {e_admin_send}")
+                await bot.send_message(ADMIN_ID, admin_text_report_error, parse_mode="HTML",
+                                       disable_web_page_preview=True)
+            except Exception as e_admin_err_send:
+                logging.error(
+                    f"Не удалось отправить отчет об ошибке администратору (ID: {ADMIN_ID}): {e_admin_err_send}")
 
+    finally:
         # Удаление временного файла
         if downloaded_filename and os.path.exists(downloaded_filename):
             try:
                 os.remove(downloaded_filename)
+                logging.info(f"Временный файл {downloaded_filename} удален.")
             except Exception as e_remove:
                 logging.error(f"Ошибка удаления файла {downloaded_filename}: {e_remove}")
-                # Дополнительно уведомить админа о проблеме с удалением файла, если это не он сам
-                if message.from_user.id != ADMIN_ID:
+                # Дополнительно уведомить админа о проблеме с удалением файла, если это не он сам и ADMIN_ID установлен
+                if ADMIN_ID and message.from_user.id != ADMIN_ID:
                     try:
                         await bot.send_message(
                             ADMIN_ID,
-                            f"‼️ <b>КРИТИЧЕСКАЯ ОШИБКА ФАЙЛОВОЙ СИСТЕМЫ:</b>\n"
+                            f"‼️ <b>КРИТИЧЕСКАЯ ОШИБКА ФАЙЛОВОЙ СИСТЕМЫ (common.py):</b>\n"
                             f"Не удалось удалить временный файл: <code>{os.path.basename(downloaded_filename)}</code>\n"
+                            f"Полный путь: <code>{downloaded_filename}</code>\n"
                             f"Ошибка: <code>{e_remove}</code>\n"
                             f"Запрос от пользователя: @{message.from_user.username or 'N/A'} (ID: {message.from_user.id})",
                             parse_mode="HTML"
