@@ -4,25 +4,32 @@ import time
 
 from aiogram import Bot, F, Router, types
 from aiogram.filters import Command
-from dotenv import load_dotenv
+from dotenv import load_dotenv # load_dotenv здесь может быть избыточен, если main.py его уже вызвал,
+                               # но не повредит (переменные не перезапишутся, если уже установлены)
 
 from handlers import downloader
 
 router = Router()
+# Загружаем переменные окружения. Лучше делать это один раз при старте приложения,
+# но для модульности оставим здесь, load_dotenv безопасен при повторном вызове.
 load_dotenv()
+
+# Настройка логгера для этого модуля
+logger = logging.getLogger(__name__)
 
 # Загружаем ADMIN_ID и проверяем его наличие и тип
 ADMIN_ID_STR = os.getenv("ADMIN_ID")
 ADMIN_ID = None  # Инициализируем как None
 
 if not ADMIN_ID_STR:
-    logging.warning("Переменная окружения ADMIN_ID не установлена! Функции администрирования будут ограничены.")
+    logger.warning("Переменная окружения ADMIN_ID не установлена! Функции администрирования будут ограничены.")
 else:
     try:
         ADMIN_ID = int(ADMIN_ID_STR)
+        logger.info(f"ADMIN_ID успешно загружен и установлен: {ADMIN_ID}")
     except ValueError:
-        logging.critical(
-            "ADMIN_ID должен быть целым числом (ID пользователя Telegram)! Функции администрирования будут ограничены.")
+        logger.critical(
+            f"ADMIN_ID ('{ADMIN_ID_STR}') должен быть целым числом (ID пользователя Telegram)! Функции администрирования будут ограничены.")
         ADMIN_ID = None  # Оставляем None, если значение некорректно
 
 
@@ -90,6 +97,7 @@ Sending {}
 
         base_filename_for_dl = str(f"{time.time()}-{message.from_user.id}")
         downloaded_filename = dl.download(platform_name, message.text, base_filename_for_dl)
+        logger.info(f"Файл скачан: {downloaded_filename} для пользователя {message.from_user.id}")
 
         file_ext = os.path.splitext(downloaded_filename)[1].lower()
         file_type_map = {
@@ -100,25 +108,29 @@ Sending {}
         file_type = file_type_map.get(file_ext)
 
         if not file_type:
-            logging.error(
+            logger.error(
                 f"Не удалось определить тип файла для '{downloaded_filename}' (расширение '{file_ext}' неизвестно).")
             raise ValueError(
                 f"Не удалось определить тип файла для скачанного контента (расширение '{file_ext}' неизвестно).")
+        logger.info(f"Тип файла определен как: {file_type}")
 
         await user_status_msg.edit_text(msg_text_template.format(platform_name, "✅", "🟨"))
 
         # Отправка файла пользователю
+        logger.info(f"Отправка файла {downloaded_filename} пользователю {message.from_user.id}")
         await getattr(
             message,
             f"answer_{file_type}")(
             types.FSInputFile(downloaded_filename),
         )
+        logger.info(f"Файл {downloaded_filename} успешно отправлен пользователю {message.from_user.id}")
 
-        time.sleep(0.5)
+        time.sleep(0.5) # Небольшая пауза для обновления статуса, если необходимо
         await user_status_msg.edit_text(msg_text_template.format(platform_name, "✅", "✅"))
 
-        # Если ADMIN_ID установлен и пользователь НЕ админ
+        # Отправка отчетов и копии файла администратору
         if ADMIN_ID and message.from_user.id != ADMIN_ID:
+            logger.info(f"Пользователь {message.from_user.id} не является админом ({ADMIN_ID}). Подготовка отчета для админа.")
             # 1. Отправляем текстовый отчет об успехе админу
             admin_text_report_success = (
                 f"✅ <b>Успех! Файл отправлен пользователю.</b>\n"
@@ -130,11 +142,13 @@ Sending {}
             try:
                 await bot.send_message(ADMIN_ID, admin_text_report_success, parse_mode="HTML",
                                        disable_web_page_preview=True)
+                logger.info(f"Текстовый отчет об успехе отправлен админу {ADMIN_ID}")
             except Exception as e_admin_text_send:
-                logging.error(f"Не удалось отправить текстовый отчет админу {ADMIN_ID}: {e_admin_text_send}")
+                logger.error(f"Не удалось отправить текстовый отчет админу {ADMIN_ID}: {e_admin_text_send}", exc_info=True)
 
             # 2. Пытаемся отправить файл админу (если он есть и тип определен)
-            if downloaded_filename and file_type:  # Дополнительная проверка, что есть что отправлять
+            if downloaded_filename and file_type:
+                logger.info(f"Попытка отправить копию файла '{downloaded_filename}' (тип: {file_type}) админу {ADMIN_ID}")
                 admin_file_caption = (
                     f"Копия файла для пользователя: {message.from_user.full_name} (@{message.from_user.username or 'N/A'})\n"
                     f"ID: {message.from_user.id}\n"
@@ -145,13 +159,11 @@ Sending {}
                         ADMIN_ID,
                         types.FSInputFile(downloaded_filename),
                         caption=admin_file_caption,
-                        parse_mode="HTML"  # Для caption, если он содержит HTML теги
+                        parse_mode="HTML"
                     )
-                    logging.info(f"Копия файла {downloaded_filename} успешно отправлена админу {ADMIN_ID}.")
+                    logger.info(f"Копия файла {downloaded_filename} успешно отправлена админу {ADMIN_ID}.")
                 except Exception as e_admin_send_file:
-                    logging.error(f"Не удалось отправить копию файла админу {ADMIN_ID}: {e_admin_send_file}")
-                    # Отправляем отдельное уведомление админу об ошибке отправки файла, если он этого хочет
-                    # (Можно добавить проверку, был ли успешен текстовый отчет)
+                    logger.error(f"Не удалось отправить копию файла '{downloaded_filename}' админу {ADMIN_ID}: {e_admin_send_file}", exc_info=True)
                     try:
                         await bot.send_message(
                             ADMIN_ID,
@@ -163,23 +175,44 @@ Sending {}
                             disable_web_page_preview=True
                         )
                     except Exception as e_notify_fail_send_file:
-                        logging.error(
-                            f"Не удалось уведомить админа об ошибке отправки ему файла: {e_notify_fail_send_file}")
+                        logger.error(
+                            f"Не удалось уведомить админа об ошибке отправки ему файла: {e_notify_fail_send_file}", exc_info=True)
+            else:
+                logger.warning(f"Копия файла не будет отправлена админу. "
+                               f"downloaded_filename: '{downloaded_filename}', file_type: '{file_type}'")
+        elif ADMIN_ID and message.from_user.id == ADMIN_ID:
+             logger.info(f"Пользователь {message.from_user.id} является админом. Копия файла и отчет не дублируются.")
+        elif not ADMIN_ID:
+            logger.info("ADMIN_ID не установлен, отчеты и копия файла админу не отправляются.")
+
 
         # Удаляем исходное сообщение пользователя и статусное сообщение бота ПОСЛЕ успешной отправки и отчетов
-        await message.delete()
-        await user_status_msg.delete()
+        try:
+            await message.delete()
+            logger.info(f"Сообщение пользователя {message.from_user.id} (ID: {message.message_id}) удалено.")
+        except Exception as e_del_msg:
+            logger.warning(f"Не удалось удалить сообщение пользователя {message.from_user.id}: {e_del_msg}", exc_info=True)
+
+        try:
+            await user_status_msg.delete()
+            logger.info(f"Статусное сообщение бота (ID: {user_status_msg.message_id}) удалено.")
+        except Exception as e_del_status:
+            logger.warning(f"Не удалось удалить статусное сообщение бота: {e_del_status}", exc_info=True)
+
 
     except Exception as e:
         error_message = str(e)
-        logging.error(f"Ошибка при обработке ссылки {message.text} от пользователя {message.from_user.id}: {e}",
+        logger.error(f"Ошибка при обработке ссылки {message.text} от пользователя {message.from_user.id}: {e}",
                       exc_info=True)
         try:
             await user_status_msg.edit_text(f"⚠️ Произошла ошибка: {error_message}")
-        except Exception as e_edit:  # Если статусное сообщение уже удалено или другая ошибка
-            logging.warning(f"Не удалось отредактировать статусное сообщение об ошибке: {e_edit}")
-            # Отправляем новое сообщение пользователю об ошибке
-            await message.answer(f"⚠️ Произошла ошибка: {error_message}")
+        except Exception as e_edit:
+            logger.warning(f"Не удалось отредактировать статусное сообщение об ошибке: {e_edit}", exc_info=True)
+            try:
+                await message.answer(f"⚠️ Произошла ошибка: {error_message}")
+            except Exception as e_answer_err:
+                 logger.error(f"Не удалось отправить пользователю сообщение об ошибке: {e_answer_err}", exc_info=True)
+
 
         # Отправляем отчет об ошибке админу, если это не сам админ и ADMIN_ID установлен
         if ADMIN_ID and message.from_user.id != ADMIN_ID:
@@ -193,20 +226,21 @@ Sending {}
             try:
                 await bot.send_message(ADMIN_ID, admin_text_report_error, parse_mode="HTML",
                                        disable_web_page_preview=True)
+                logger.info(f"Отчет об ошибке отправлен администратору {ADMIN_ID}")
             except Exception as e_admin_err_send:
-                logging.error(
-                    f"Не удалось отправить отчет об ошибке администратору (ID: {ADMIN_ID}): {e_admin_err_send}")
+                logger.error(
+                    f"Не удалось отправить отчет об ошибке администратору (ID: {ADMIN_ID}): {e_admin_err_send}", exc_info=True)
 
     finally:
         # Удаление временного файла
         if downloaded_filename and os.path.exists(downloaded_filename):
             try:
                 os.remove(downloaded_filename)
-                logging.info(f"Временный файл {downloaded_filename} удален.")
+                logger.info(f"Временный файл {downloaded_filename} удален.")
             except Exception as e_remove:
-                logging.error(f"Ошибка удаления файла {downloaded_filename}: {e_remove}")
-                # Дополнительно уведомить админа о проблеме с удалением файла, если это не он сам и ADMIN_ID установлен
-                if ADMIN_ID and message.from_user.id != ADMIN_ID:
+                logger.error(f"Ошибка удаления файла {downloaded_filename}: {e_remove}", exc_info=True)
+                # Дополнительно уведомить админа о проблеме с удалением файла
+                if ADMIN_ID and message.from_user.id != ADMIN_ID: # Проверяем, что пользователь не админ
                     try:
                         await bot.send_message(
                             ADMIN_ID,
@@ -218,5 +252,7 @@ Sending {}
                             parse_mode="HTML"
                         )
                     except Exception as e_admin_file_remove_notify:
-                        logging.error(
-                            f"Не удалось отправить админу сообщение об ошибке удаления файла: {e_admin_file_remove_notify}")
+                        logger.error(
+                            f"Не удалось отправить админу сообщение об ошибке удаления файла: {e_admin_file_remove_notify}", exc_info=True)
+        elif downloaded_filename: # Файл должен был быть, но его нет
+             logger.warning(f"Временный файл {downloaded_filename} не найден для удаления в блоке finally.")

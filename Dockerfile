@@ -7,6 +7,7 @@ RUN apt-get update && \
     ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
+# Обновляем pip до последней версии
 RUN pip install --upgrade pip
 
 # Устанавливаем переменную окружения для корректной работы Python
@@ -16,11 +17,16 @@ ENV PYTHONUNBUFFERED=1
 # Устанавливаем рабочую директорию в контейнере
 WORKDIR /app
 
-# Копируем файл requirements.txt, если он существует
-COPY requirements.txt /app/
-
-# Устанавливаем зависимости
-RUN pip install --no-cache-dir -r requirements.txt
+# Устанавливаем зависимости, обновляя их до последних версий.
+# Добавляем spotdl, так как он используется в downloader.py.
+RUN pip install --no-cache-dir --upgrade \
+    aiogram \
+    python-dotenv \
+    requests \
+    beautifulsoup4 \
+    youthon \
+    yt-dlp \
+    spotdl
 
 # Копируем код бота в контейнер
 COPY . /app/
