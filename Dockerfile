@@ -3,7 +3,8 @@ FROM python:3.13-slim
 # Устанавливаем необходимые пакеты
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    build-essential && \
+    build-essential \
+    ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip
